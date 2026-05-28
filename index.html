@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="nb">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Løpefart · alder · nivå</title>
+  <meta name="description" content="Legg inn én løpetid og se hvordan den står seg gjennom hele løperlivet – på tvers av alder, kjønn, distanse og nivå." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #121215; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    #root { min-height: 100vh; }
+    @media (max-width: 620px) {
+      .kontrollrad { grid-template-columns: 1fr !important; }
+      .kort { grid-template-columns: 1fr !important; }
+    }
+  </style>
+
+  <!-- React + Babel fra CDN. Babel oversetter JSX i nettleseren – intet byggesteg. -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!--
+    Datagrunnlaget lastes som en ekte ES-modul fra loperdata.js, slik at data
+    og logikk holdes adskilt fra UI – akkurat som i repoet. Vi henter modulen,
+    legger den på window, og kjører deretter Babel på UI-koden under.
+  -->
+  <script type="module">
+    import * as loperdata from './loperdata.js';
+    window.LOPERDATA = loperdata;
+    // Signaliser at data er klar, så UI-skriptet kan starte.
+    window.dispatchEvent(new Event('loperdata-klar'));
+  </script>
+
+  <!-- UI-koden. type="text/babel" => Babel oversetter JSX ved oppstart. -->
+  <script type="text/babel" data-presets="react">
+    function start() {
+      const { useState, useMemo } = React;
+      const {
+        DISTANSER, NIVAER, ALDER_MIN, ALDER_MAX, PEAK_AGE,
+        rekordtid, nivatid, ageGradeForTid, ekvivalentTid,
+        tempoSekPerKm, hastighetKmt, formatTid, formatTempo, parseTid,
+      } = window.LOPERDATA;
+
+      const AKSENT = '#e8703a';
+      const aldre = Array.from({ length: ALDER_MAX - ALDER_MIN + 1 }, (_, i) => ALDER_MIN + i);
+
+      function nivaFarge(id) {
+        return { p99: '#7fd1c4', p95: '#86b8e0', p90: '#9d9de0', p75: '#c79de0', p50: '#e0a59d', p25: '#d8c98a' }[id] || '#888';
+      }
+      function nivanavnFor(ag) {
+        let best = NIVAER[NIVAER.length - 1];
+        for (const n of NIVAER) if (ag >= n.ageGrade) { best = n; break; }
+        return best.navn;
+      }
+      function aksetikker(yMin, yMax, mal) {
+        const t = [];
+        for (let i = 0; i <= 6; i++) {
+          const v = yMin + (i / 6) * (yMax - yMin);
+          t.push({ v, label: mal === 'tempo' ? formatTempo(v) : v.toFixed(1) });
+        }
+        return t;
+      }
+
+      function Felt({ label, children }) {
+        return <div style={S.felt}><label style={S.label}>{label}</label>{children}</div>;
+      }
+      function Tall({ etikett, verdi, enhet, farge, undertekst }) {
+        return (
+          <div style={S.tallkort}>
+            <div style={S.tallEtikett}>{etikett}</div>
+            <div style={{ ...S.tallVerdi, color: farge || '#f4f4f6' }}>{verdi}</div>
+            <div style={S.tallEnhet}>{undertekst || enhet}</div>
+          </div>
+        );
+      }
+      function HoverBoks({ alder, kurver, mal, km }) {
+        return (
+          <div style={S.hoverboks}>
+            <div style={S.hoverTit}>{alder} år</div>
+            {kurver.map((c) => {
+              const p = c.punkter.find((q) => q.alder === alder);
+              const v = mal === 'tempo' ? formatTempo(tempoSekPerKm(p.sek, km)) + ' /km' : hastighetKmt(p.sek, km).toFixed(1) + ' km/t';
+              return (
+                <div key={c.id} style={S.hoverRad}>
+                  <span style={{ ...S.legendDot, background: c.farge }} />
+                  <span style={{ flex: 1, color: c.erMin ? '#fff' : '#b8b8c0' }}>{c.navn}</span>
+                  <span style={S.hoverVerdi}>{v}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
+      function App() {
+        const [distanseId, setDistanseId] = useState(42195);
+        const [tidInput, setTidInput] = useState('3:30:00');
+        const [kjonn, setKjonn] = useState('M');
+        const [alder, setAlder] = useState(40);
+        const [mal, setMal] = useState('tempo');
+        const [hover, setHover] = useState(null);
+
+        const distanse = DISTANSER.find((d) => d.id === distanseId);
+        const km = distanse.km;
+        const tidSek = parseTid(tidInput);
+        const gyldig = tidSek != null && tidSek > 0;
+        const minAgeGrade = gyldig ? ageGradeForTid(distanseId, kjonn, alder, tidSek) : null;
+        const verdi = (sek) => (mal === 'tempo' ? tempoSekPerKm(sek, km) : hastighetKmt(sek, km));
+
+        const kurver = useMemo(() => {
+          const k = NIVAER.map((n) => ({
+            id: n.id, navn: n.navn, ageGrade: n.ageGrade, farge: nivaFarge(n.id),
+            punkter: aldre.map((a) => ({ alder: a, sek: nivatid(distanseId, kjonn, a, n.ageGrade) })),
+          }));
+          if (gyldig) k.push({
+            id: 'min', navn: 'Din kurve', ageGrade: minAgeGrade, farge: AKSENT, erMin: true,
+            punkter: aldre.map((a) => ({ alder: a, sek: nivatid(distanseId, kjonn, a, minAgeGrade) })),
+          });
+          return k;
+        }, [distanseId, kjonn, gyldig, minAgeGrade, mal]);
+
+        const alleV = kurver.flatMap((c) => c.punkter.map((p) => verdi(p.sek)));
+        const yMin = Math.min(...alleV) * 0.96, yMax = Math.max(...alleV) * 1.04;
+        const W = 720, H = 420, padL = 64, padR = 24, padT = 24, padB = 48;
+        const px = (a) => padL + ((a - ALDER_MIN) / (ALDER_MAX - ALDER_MIN)) * (W - padL - padR);
+        const py = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+        const path = (p) => p.map((q, i) => `${i ? 'L' : 'M'}${px(q.alder).toFixed(1)},${py(verdi(q.sek)).toFixed(1)}`).join(' ');
+        const yTicks = aksetikker(yMin, yMax, mal);
+        const hoverAlder = hover ?? alder;
+
+        return (
+          <div style={S.wrap}>
+            <header style={S.header}>
+              <div style={S.kicker}>LØPEFART · ALDER · NIVÅ</div>
+              <h1 style={S.h1}>Hvor raskt løper du <span style={{ color: AKSENT }}>egentlig</span>?</h1>
+              <p style={S.lede}>Legg inn én tid. Se hvordan den står seg gjennom hele løperlivet – og hva den ville vært på andre distanser. Modellen bygger på age-grading fra World Masters Athletics.</p>
+            </header>
+
+            <section style={S.panel}>
+              <div style={S.kontrollrad} className="kontrollrad">
+                <Felt label="Distanse">
+                  <div style={S.segment}>{DISTANSER.map((d) => (
+                    <button key={d.id} onClick={() => setDistanseId(d.id)} style={{ ...S.seg, ...(d.id === distanseId ? S.segAktiv : {}) }}>{d.navn}</button>
+                  ))}</div>
+                </Felt>
+                <Felt label="Tid (TT:MM:SS el. MM:SS)">
+                  <input value={tidInput} onChange={(e) => setTidInput(e.target.value)} style={{ ...S.input, borderColor: gyldig ? '#3a3a40' : '#a23' }} placeholder="3:30:00" />
+                </Felt>
+                <Felt label="Kjønn">
+                  <div style={S.segment}>{[['M', 'Menn'], ['K', 'Kvinner']].map(([k, l]) => (
+                    <button key={k} onClick={() => setKjonn(k)} style={{ ...S.seg, ...(k === kjonn ? S.segAktiv : {}) }}>{l}</button>
+                  ))}</div>
+                </Felt>
+                <Felt label={`Alder · ${alder} år`}>
+                  <input type="range" min={ALDER_MIN} max={ALDER_MAX} value={alder} onChange={(e) => setAlder(+e.target.value)} style={S.range} />
+                </Felt>
+              </div>
+            </section>
+
+            {gyldig && (
+              <section style={S.tallrad}>
+                <Tall etikett="Tempo" verdi={formatTempo(tempoSekPerKm(tidSek, km))} enhet="min/km" />
+                <Tall etikett="Hastighet" verdi={hastighetKmt(tidSek, km).toFixed(2)} enhet="km/t" />
+                <Tall etikett="Nivå" verdi={(minAgeGrade * 100).toFixed(0) + '%'} farge={AKSENT} undertekst={nivanavnFor(minAgeGrade)} />
+              </section>
+            )}
+
+            <section style={S.panel}>
+              <div style={S.grafhode}>
+                <h2 style={S.h2}>{mal === 'tempo' ? 'Tempo' : 'Hastighet'} gjennom løperlivet</h2>
+                <div style={S.segment}>{[['tempo', 'Tempo'], ['hastighet', 'Hastighet']].map(([m, l]) => (
+                  <button key={m} onClick={() => setMal(m)} style={{ ...S.seg, ...(m === mal ? S.segAktiv : {}) }}>{l}</button>
+                ))}</div>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} onMouseLeave={() => setHover(null)}>
+                  {yTicks.map((t) => (
+                    <g key={'y' + t.v}>
+                      <line x1={padL} y1={py(t.v)} x2={W - padR} y2={py(t.v)} stroke="#26262b" />
+                      <text x={padL - 10} y={py(t.v) + 4} fill="#8a8a92" fontSize="11" textAnchor="end">{t.label}</text>
+                    </g>
+                  ))}
+                  {[20, 30, 40, 50, 60, 70, 80].map((a) => (
+                    <g key={'x' + a}>
+                      <line x1={px(a)} y1={H - padB} x2={px(a)} y2={H - padB + 5} stroke="#3a3a40" />
+                      <text x={px(a)} y={H - padB + 20} fill="#8a8a92" fontSize="11" textAnchor="middle">{a}</text>
+                    </g>
+                  ))}
+                  <text x={W / 2} y={H - 6} fill="#6a6a72" fontSize="11" textAnchor="middle">Alder (år)</text>
+                  <line x1={px(PEAK_AGE)} y1={padT} x2={px(PEAK_AGE)} y2={H - padB} stroke="#3a3a40" strokeDasharray="3 4" />
+                  {kurver.filter((c) => !c.erMin).map((c) => (
+                    <path key={c.id} d={path(c.punkter)} fill="none" stroke={c.farge} strokeWidth="1.5" opacity="0.55" />
+                  ))}
+                  {kurver.filter((c) => c.erMin).map((c) => (
+                    <path key={c.id} d={path(c.punkter)} fill="none" stroke={c.farge} strokeWidth="2.5" />
+                  ))}
+                  {gyldig && (
+                    <g>
+                      <circle cx={px(alder)} cy={py(verdi(tidSek))} r="7" fill={AKSENT} stroke="#15151a" strokeWidth="2.5" />
+                      <circle cx={px(alder)} cy={py(verdi(tidSek))} r="13" fill="none" stroke={AKSENT} opacity="0.4" />
+                    </g>
+                  )}
+                  {aldre.map((a) => (
+                    <rect key={a} x={px(a) - (W - padL - padR) / aldre.length / 2} y={padT} width={(W - padL - padR) / aldre.length} height={H - padT - padB} fill="transparent" onMouseEnter={() => setHover(a)} />
+                  ))}
+                  <line x1={px(hoverAlder)} y1={padT} x2={px(hoverAlder)} y2={H - padB} stroke="#fff" strokeWidth="0.75" opacity="0.25" />
+                  {kurver.map((c) => {
+                    const p = c.punkter.find((q) => q.alder === hoverAlder);
+                    return <circle key={'h' + c.id} cx={px(hoverAlder)} cy={py(verdi(p.sek))} r="3" fill={c.farge} />;
+                  })}
+                </svg>
+                <HoverBoks alder={hoverAlder} kurver={kurver} mal={mal} km={km} />
+              </div>
+              <div style={S.legend}>{kurver.map((c) => (
+                <span key={c.id} style={S.legendItem}>
+                  <span style={{ ...S.legendDot, background: c.farge, opacity: c.erMin ? 1 : 0.7 }} />
+                  {c.navn}{c.erMin ? ` (${(c.ageGrade * 100).toFixed(0)}%)` : ''}
+                </span>
+              ))}</div>
+            </section>
+
+            {gyldig && (
+              <section style={S.panel}>
+                <h2 style={S.h2}>Samme nivå på andre distanser</h2>
+                <p style={S.smatekst}>Hva tilsvarer prestasjonen din ({(minAgeGrade * 100).toFixed(0)}% age-grade) på de andre distansene, for {alder}-åring, {kjonn === 'M' ? 'menn' : 'kvinner'}?</p>
+                <div style={S.kort} className="kort">{DISTANSER.map((d) => {
+                  const t = ekvivalentTid(distanseId, d.id, kjonn, alder, tidSek);
+                  const erDenne = d.id === distanseId;
+                  return (
+                    <div key={d.id} style={{ ...S.kortItem, ...(erDenne ? S.kortAktiv : {}) }}>
+                      <div style={S.kortNavn}>{d.navn}{erDenne ? ' ·' : ''}</div>
+                      <div style={S.kortTid}>{formatTid(t)}</div>
+                      <div style={S.kortTempo}>{formatTempo(tempoSekPerKm(t, d.km))} /km · {hastighetKmt(t, d.km).toFixed(1)} km/t</div>
+                    </div>
+                  );
+                })}</div>
+              </section>
+            )}
+
+            <section style={S.panel}>
+              <h2 style={S.h2}>Hva betyr tallene?</h2>
+              <div style={S.forklaring}>
+                <p><b>Tempo</b> er tid per kilometer (min/km) – lavere er raskere. <b>Hastighet</b> er km/t – høyere er raskere. To sider av samme sak.</p>
+                <p><b>Age-grade</b> er prestasjonen din som prosent av rekord-ekvivalenten for din alder og ditt kjønn. 100% er verdensrekordnivå. Det gjør det mulig å sammenligne løpere på tvers av alder og distanse rettferdig: en 3:30-maraton som 25-åring og som 55-åring er ikke samme prestasjon, men kan ha samme age-grade.</p>
+                <p>Nivåene er terskler basert på de internasjonale age-grading-kategoriene:</p>
+                <ul style={S.ul}>{NIVAER.map((n) => (
+                  <li key={n.id}><b style={{ color: nivaFarge(n.id) }}>{n.navn}</b> – {n.beskrivelse} (~{(n.ageGrade * 100).toFixed(0)}% age-grade)</li>
+                ))}</ul>
+                <p style={S.disclaimer}>Merk: percentilene er forankret i løperpopulasjonen – folk som faktisk stiller til start – ikke i hele befolkningen. Dette er en modell, ikke en fasit.</p>
+              </div>
+            </section>
+
+            <section style={S.panel}>
+              <h2 style={S.h2}>Formelen bak kurvene</h2>
+              <div style={S.formel}>
+                <p>For distanse <i>d</i>, kjønn <i>k</i>, alder <i>a</i>:</p>
+                <code style={S.kode}>rekordtid(d, k, a) = standardtid(d, k) × aldersfaktor(a, k)</code>
+                <p>Standardtiden er verdensrekord-ekvivalenten ved toppalder ({PEAK_AGE} år). Aldersfaktoren:</p>
+                <code style={S.kode}>{`a ≤ ${PEAK_AGE}:  1 + 0,03·(${PEAK_AGE}−a)/(${PEAK_AGE}−${ALDER_MIN})\na > ${PEAK_AGE}:  1 + (0,0028·Δ + 0,000095·Δ²)·kj,  Δ = a−${PEAK_AGE}`}</code>
+                <p>Tid for et nivå med age-grade <i>g</i>:</p>
+                <code style={S.kode}>tid(d, k, a, g) = rekordtid(d, k, a) / g</code>
+                <p>Din egen age-grade: <code style={S.kodeInline}>g = rekordtid(d, k, a) / din_tid</code>. Omregning mellom distanser bevarer <i>g</i>.</p>
+              </div>
+            </section>
+
+            <footer style={S.footer}>Personlig prosjekt · åpen kildekode · data og logikk i <code style={S.kodeInline}>loperdata.js</code></footer>
+          </div>
+        );
+      }
+
+      const S = {
+        wrap: { maxWidth: 880, margin: '0 auto', padding: '32px 20px 80px', color: '#e8e8ec' },
+        header: { marginBottom: 28 },
+        kicker: { fontSize: 11, letterSpacing: '0.22em', color: AKSENT, fontWeight: 600, marginBottom: 12 },
+        h1: { fontFamily: '"Fraunces", Georgia, serif', fontSize: 'clamp(28px,5vw,46px)', lineHeight: 1.05, margin: '0 0 14px', fontWeight: 600 },
+        lede: { color: '#a8a8b2', fontSize: 16, lineHeight: 1.55, maxWidth: 560, margin: 0 },
+        panel: { background: '#1a1a1f', border: '1px solid #26262b', borderRadius: 14, padding: 22, marginBottom: 18 },
+        kontrollrad: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 },
+        felt: { display: 'flex', flexDirection: 'column', gap: 8 },
+        label: { fontSize: 12, color: '#8a8a92', fontWeight: 500 },
+        segment: { display: 'flex', gap: 4, background: '#15151a', padding: 4, borderRadius: 9, flexWrap: 'wrap' },
+        seg: { flex: 1, minWidth: 56, padding: '8px 10px', border: 'none', borderRadius: 6, background: 'transparent', color: '#a8a8b2', fontSize: 13, cursor: 'pointer', fontWeight: 500 },
+        segAktiv: { background: AKSENT, color: '#15151a', fontWeight: 600 },
+        input: { background: '#15151a', border: '1px solid #3a3a40', borderRadius: 8, padding: '10px 12px', color: '#f4f4f6', fontSize: 15, fontVariantNumeric: 'tabular-nums', width: '100%', boxSizing: 'border-box' },
+        range: { width: '100%', accentColor: AKSENT },
+        tallrad: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 18 },
+        tallkort: { background: '#1a1a1f', border: '1px solid #26262b', borderRadius: 12, padding: '16px 18px' },
+        tallEtikett: { fontSize: 11, color: '#8a8a92', textTransform: 'uppercase', letterSpacing: '0.1em' },
+        tallVerdi: { fontSize: 30, fontWeight: 600, fontVariantNumeric: 'tabular-nums', margin: '4px 0 2px', fontFamily: '"Fraunces", Georgia, serif' },
+        tallEnhet: { fontSize: 12, color: '#8a8a92' },
+        grafhode: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 10 },
+        h2: { fontFamily: '"Fraunces", Georgia, serif', fontSize: 20, margin: 0, fontWeight: 600 },
+        legend: { display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 14, fontSize: 12, color: '#a8a8b2' },
+        legendItem: { display: 'flex', alignItems: 'center', gap: 6 },
+        legendDot: { width: 9, height: 9, borderRadius: 9, display: 'inline-block' },
+        hoverboks: { position: 'absolute', top: 8, right: 8, background: 'rgba(10,10,14,0.92)', border: '1px solid #2e2e36', borderRadius: 10, padding: '10px 12px', fontSize: 12, minWidth: 168 },
+        hoverTit: { fontWeight: 600, marginBottom: 6, color: '#f4f4f6' },
+        hoverRad: { display: 'flex', alignItems: 'center', gap: 7, padding: '2px 0' },
+        hoverVerdi: { fontVariantNumeric: 'tabular-nums', color: '#e8e8ec' },
+        smatekst: { color: '#a8a8b2', fontSize: 14, margin: '6px 0 16px', lineHeight: 1.5 },
+        kort: { display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 12 },
+        kortItem: { background: '#15151a', border: '1px solid #26262b', borderRadius: 10, padding: 16 },
+        kortAktiv: { borderColor: AKSENT },
+        kortNavn: { fontSize: 13, color: '#8a8a92', marginBottom: 4 },
+        kortTid: { fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums', fontFamily: '"Fraunces", Georgia, serif' },
+        kortTempo: { fontSize: 12, color: '#8a8a92', marginTop: 3 },
+        forklaring: { color: '#b8b8c0', fontSize: 14.5, lineHeight: 1.6 },
+        ul: { paddingLeft: 18, margin: '4px 0' },
+        disclaimer: { fontSize: 13, color: '#8a8a92', fontStyle: 'italic', marginTop: 12 },
+        formel: { color: '#b8b8c0', fontSize: 14.5, lineHeight: 1.6 },
+        kode: { display: 'block', background: '#101014', border: '1px solid #26262b', borderRadius: 8, padding: '12px 14px', fontFamily: 'ui-monospace, monospace', fontSize: 13, color: '#9fd1c4', margin: '8px 0 14px', whiteSpace: 'pre-wrap' },
+        kodeInline: { background: '#101014', padding: '2px 6px', borderRadius: 4, fontFamily: 'ui-monospace, monospace', fontSize: 12.5, color: '#9fd1c4' },
+        footer: { textAlign: 'center', color: '#6a6a72', fontSize: 12, marginTop: 24 },
+      };
+
+      const rot = ReactDOM.createRoot(document.getElementById('root'));
+      rot.render(<App />);
+    }
+
+    // Data lastes asynkront som ES-modul. Vent til den er klar før vi tegner.
+    if (window.LOPERDATA) start();
+    else window.addEventListener('loperdata-klar', start);
+  </script>
+</body>
+</html>

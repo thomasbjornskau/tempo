@@ -1,0 +1,21 @@
+# Avhengigheter (kun relevant hvis du senere går over til et byggesteg)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Byggemapper
+dist/
+build/
+
+# Operativsystem
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Logger
+npm-debug.log*
+*.log
