@@ -3,6 +3,8 @@
 Et lite, åpent verktøy der løpere legger inn én tid og ser hvordan den står seg
 gjennom hele løperlivet – på tvers av alder, kjønn, distanse og prestasjonsnivå.
 
+[https://thomasbjornskau.github.io/tempo/](https://thomasbjornskau.github.io/tempo/)
+
 ![Løpefart](skjermbilde.png)
 
 ## Hva det gjør
